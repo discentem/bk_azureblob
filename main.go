@@ -17,6 +17,7 @@ var (
 
 func init() {
 	deviceCode = flag.Bool("device_code", false, "Determines if credential for Azure Blob operations should be device_code")
+	flag.Parse()
 }
 
 func main() {
@@ -48,12 +49,12 @@ func main() {
 		log.Fatal(err)
 	}
 	blob := container.NewBlobClient("azureblobtest")
-	_, err = blob.GetProperties(ctx, &azblob.GetBlobPropertiesOptions{})
+	blobProps, err := blob.GetProperties(ctx, &azblob.GetBlobPropertiesOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("got this far")
-	// fmt.Println(*blobProps.ContentType)
+	fmt.Println(*blobProps.ContentType)
 	// resp, err := blob.Download(ctx, &azblob.DownloadBlobOptions{})
 	// if err != nil {
 	// 	log.Fatal(err)
