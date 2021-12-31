@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 )
 
+// AzureBlobDownloader is a logical grouping of the various clients needed for Blob downloads
 type AzureBlobDownloader struct {
 	ClientID        string
 	TenantID        string
@@ -21,12 +22,16 @@ type AzureBlobDownloader struct {
 	ctx             context.Context
 }
 
+// InitCredAndContainerClient returns an authenticated Azure Blob Container Client.
+// For now, there is no choice of credential for caller, *azidentity.DeviceCodeCredential is always used.
+// https://github.com/Azure/azure-sdk-for-go/issues/16723
 func (c *AzureBlobDownloader) InitCredAndContainerClient() (*azblob.ContainerClient, error) {
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/azidentity/device_code_credential.go
-
 	credential, err := azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
 		TenantID: tenantID,
 		ClientID: clientID,
+		// Customizes the UserPrompt. Replaces VerificationURL with shortlink.
+		// Providing a custom UserPrompt can also allow the URL to be rewritten anywhere, instead of just stdout
 		UserPrompt: func(ctx context.Context, deviceCodeMessage azidentity.DeviceCodeMessage) error {
 			msg := strings.Replace(deviceCodeMessage.Message, "https://microsoft.com/devicelogin", "https://aka.ms/devicelogin", 1)
 			fmt.Println(msg)
@@ -37,6 +42,7 @@ func (c *AzureBlobDownloader) InitCredAndContainerClient() (*azblob.ContainerCli
 		return nil, err
 	}
 	container, err := azblob.NewContainerClient(
+		// Construct container url
 		fmt.Sprintf("https://%s.blob.core.windows.net/%s", storageAccount, containerName),
 		credential,
 		&azblob.ClientOptions{},
@@ -47,12 +53,14 @@ func (c *AzureBlobDownloader) InitCredAndContainerClient() (*azblob.ContainerCli
 	return &container, nil
 }
 
+// init sets the container client and creates a context if these aren't already initialized
 func (c *AzureBlobDownloader) init() error {
 	if c.containerClient == nil {
 		client, err := c.InitCredAndContainerClient()
 		if err != nil {
 			return err
 		}
+		// safe client in c for reuse
 		c.containerClient = client
 	}
 	if c.ctx == nil {
@@ -61,6 +69,7 @@ func (c *AzureBlobDownloader) init() error {
 	return nil
 }
 
+// WriteToFile is use to write the output of azblob.BlobClient.Download() to a file.
 func WriteToFile(content io.ReadCloser, destination string) error {
 	out, err := os.Create(destination)
 	if err != nil {
@@ -74,6 +83,7 @@ func WriteToFile(content io.ReadCloser, destination string) error {
 	return nil
 }
 
+// Download downloads a blob to a local file. If AzureBlobDownloader is not yet authenicated, Download will execute authentication flow.
 func (c *AzureBlobDownloader) Download(asset, destination string) error {
 	if err := c.init(); err != nil {
 		return err
@@ -93,8 +103,7 @@ func main() {
 		TenantID:      tenantID,
 		ContainerName: containerName,
 	}
-	err := az.Download("azureblobtest", "azureblobtest.txt")
-	if err != nil {
+	if err := az.Download("azureblobtest", "azureblobtest.txt"); err != nil {
 		log.Fatal(err)
 	}
 	b, err := ioutil.ReadFile("azureblobtest.txt")
