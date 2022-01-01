@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -13,19 +12,19 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 )
 
-// AzureBlobDownloader is a logical grouping of the various clients needed for Blob downloads
-type AzureBlobDownloader struct {
+// AzureBlobClient is an abstraction of the various clients needed for Blob downloads
+type AzureBlobClient struct {
 	ClientID        string
 	TenantID        string
+	StorageAccount  string
 	ContainerName   string
 	containerClient *azblob.ContainerClient
-	ctx             context.Context
 }
 
 // InitCredAndContainerClient returns an authenticated Azure Blob Container Client.
 // For now, there is no choice of credential for caller, *azidentity.DeviceCodeCredential is always used.
 // https://github.com/Azure/azure-sdk-for-go/issues/16723
-func (c *AzureBlobDownloader) InitCredAndContainerClient() (*azblob.ContainerClient, error) {
+func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient, error) {
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/azidentity/device_code_credential.go
 	credential, err := azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
 		TenantID: tenantID,
@@ -43,7 +42,7 @@ func (c *AzureBlobDownloader) InitCredAndContainerClient() (*azblob.ContainerCli
 	}
 	container, err := azblob.NewContainerClient(
 		// Construct container url
-		fmt.Sprintf("https://%s.blob.core.windows.net/%s", storageAccount, containerName),
+		fmt.Sprintf("https://%s.blob.core.windows.net/%s", c.StorageAccount, c.ContainerName),
 		credential,
 		&azblob.ClientOptions{},
 	)
@@ -54,7 +53,7 @@ func (c *AzureBlobDownloader) InitCredAndContainerClient() (*azblob.ContainerCli
 }
 
 // init sets the container client and creates a context if these aren't already initialized
-func (c *AzureBlobDownloader) init() error {
+func (c *AzureBlobClient) init() error {
 	if c.containerClient == nil {
 		client, err := c.InitCredAndContainerClient()
 		if err != nil {
@@ -63,53 +62,104 @@ func (c *AzureBlobDownloader) init() error {
 		// safe client in c for reuse
 		c.containerClient = client
 	}
-	if c.ctx == nil {
-		c.ctx = context.Background()
-	}
 	return nil
 }
 
-// WriteToFile is use to write the output of azblob.BlobClient.Download() to a file.
-func WriteToFile(content io.ReadCloser, destination string) error {
-	out, err := os.Create(destination)
-	if err != nil {
-		return err
+func bytesTransferredFn(isDownload bool, size int64) func(bytesTransferred int64) {
+	return func(bytesTransferred int64) {
+		percent := float64(bytesTransferred) / float64(size) * 100
+		var msg string
+		if isDownload {
+			fmt.Println("blah")
+			msg = fmt.Sprintf("Download: %.2f...", percent)
+		} else {
+			msg = fmt.Sprintf("Upload: %.2f...", percent)
+		}
+
+		fmt.Println(msg)
 	}
-	defer out.Close()
-	_, err = io.Copy(out, content)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 // Download downloads a blob to a local file. If AzureBlobDownloader is not yet authenicated, Download will execute authentication flow.
-func (c *AzureBlobDownloader) Download(asset, destination string) error {
+func (c *AzureBlobClient) Download(ctx context.Context, asset, destination string) error {
 	if err := c.init(); err != nil {
 		return err
 	}
 	blob := c.containerClient.NewBlobClient(asset)
-	resp, err := blob.Download(c.ctx, &azblob.DownloadBlobOptions{})
+	f, err := os.Create(destination)
 	if err != nil {
 		return err
 	}
-	body := resp.Body(azblob.RetryReaderOptions{})
-	return WriteToFile(body, destination)
+	defer f.Close()
+	blobProps, err := blob.GetProperties(ctx, &azblob.GetBlobPropertiesOptions{})
+	size := blobProps.ContentLength
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(*size); err != nil {
+		return err
+	}
+	fmt.Println(*size * 1024)
+	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/storage/azblob/highlevel.go
+	err = blob.DownloadBlobToFile(ctx, 0, 0, f, azblob.HighLevelDownloadFromBlobOptions{
+		Progress: bytesTransferredFn(true, *size),
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *AzureBlobClient) Upload(ctx context.Context, file *os.File, blobPath string) error {
+	if err := c.init(); err != nil {
+		return err
+	}
+	newBlob := c.containerClient.NewBlockBlobClient(blobPath)
+	if file == nil {
+		return errors.New("file cannot be nil")
+	}
+	fileStats, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	size := fileStats.Size()
+
+	_, err = newBlob.UploadFileToBlockBlob(ctx, file, azblob.HighLevelUploadToBlockBlobOption{
+		Progress: bytesTransferredFn(false, size),
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func main() {
-	az := AzureBlobDownloader{
-		ClientID:      clientID,
-		TenantID:      tenantID,
-		ContainerName: containerName,
+	az := AzureBlobClient{
+		ClientID:       clientID,
+		TenantID:       tenantID,
+		ContainerName:  containerName,
+		StorageAccount: storageAccount,
 	}
-	if err := az.Download("azureblobtest", "azureblobtest.txt"); err != nil {
-		log.Fatal(err)
-	}
-	b, err := ioutil.ReadFile("azureblobtest.txt")
+
+	ctx := context.Background()
+
+	testFileName := "azureblobtest.txt"
+	f, err := os.Create(testFileName)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(string(b))
+	defer f.Close()
+	if err := f.Truncate(70 * 1024 * 1024); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := az.Upload(ctx, f, testFileName); err != nil {
+		log.Fatal(err)
+	}
+	f.Close()
+
+	if err := az.Download(ctx, testFileName, testFileName); err != nil {
+		log.Fatal(err)
+	}
 
 }
