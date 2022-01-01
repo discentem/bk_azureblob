@@ -15,6 +15,7 @@ import (
 // AzureBlobClient is an abstraction of the various clients needed for Blob downloads
 type AzureBlobClient struct {
 	ClientID        string
+	ClientSecret    string
 	TenantID        string
 	StorageAccount  string
 	ContainerName   string
@@ -27,8 +28,8 @@ type AzureBlobClient struct {
 func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient, error) {
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/azidentity/device_code_credential.go
 	credential, err := azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
-		TenantID: tenantID,
-		ClientID: clientID,
+		TenantID: c.TenantID,
+		ClientID: c.ClientID,
 		// Customizes the UserPrompt. Replaces VerificationURL with shortlink.
 		// Providing a custom UserPrompt can also allow the URL to be rewritten anywhere, instead of just stdout
 		UserPrompt: func(ctx context.Context, deviceCodeMessage azidentity.DeviceCodeMessage) error {
@@ -70,7 +71,6 @@ func bytesTransferredFn(isDownload bool, size int64) func(bytesTransferred int64
 		percent := float64(bytesTransferred) / float64(size) * 100
 		var msg string
 		if isDownload {
-			fmt.Println("blah")
 			msg = fmt.Sprintf("Download: %.2f...", percent)
 		} else {
 			msg = fmt.Sprintf("Upload: %.2f...", percent)
@@ -102,6 +102,8 @@ func (c *AzureBlobClient) Download(ctx context.Context, asset, destination strin
 	fmt.Println(*size * 1024)
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/storage/azblob/highlevel.go
 	err = blob.DownloadBlobToFile(ctx, 0, 0, f, azblob.HighLevelDownloadFromBlobOptions{
+		// DownloadBlob*() Progress is currently broken
+		// https://github.com/Azure/azure-sdk-for-go/issues/16726
 		Progress: bytesTransferredFn(true, *size),
 	})
 	if err != nil {
@@ -136,6 +138,7 @@ func (c *AzureBlobClient) Upload(ctx context.Context, file *os.File, blobPath st
 func main() {
 	az := AzureBlobClient{
 		ClientID:       clientID,
+		ClientSecret:   clientSecret,
 		TenantID:       tenantID,
 		ContainerName:  containerName,
 		StorageAccount: storageAccount,
@@ -144,19 +147,6 @@ func main() {
 	ctx := context.Background()
 
 	testFileName := "azureblobtest.txt"
-	f, err := os.Create(testFileName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
-	if err := f.Truncate(70 * 1024 * 1024); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := az.Upload(ctx, f, testFileName); err != nil {
-		log.Fatal(err)
-	}
-	f.Close()
 
 	if err := az.Download(ctx, testFileName, testFileName); err != nil {
 		log.Fatal(err)
