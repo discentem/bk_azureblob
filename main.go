@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	progressbar "github.com/schollz/progressbar/v3"
+
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 )
@@ -66,17 +68,9 @@ func (c *AzureBlobClient) init() error {
 	return nil
 }
 
-func bytesTransferredFn(isDownload bool, size int64) func(bytesTransferred int64) {
+func bytesTransferredFn(isDownload bool, size int64, progbar *progressbar.ProgressBar) func(bytesTransferred int64) {
 	return func(bytesTransferred int64) {
-		percent := float64(bytesTransferred) / float64(size) * 100
-		var msg string
-		if isDownload {
-			msg = fmt.Sprintf("Download: %.2f...", percent)
-		} else {
-			msg = fmt.Sprintf("Upload: %.2f...", percent)
-		}
-
-		fmt.Println(msg)
+		progbar.Set64(bytesTransferred)
 	}
 }
 
@@ -99,12 +93,13 @@ func (c *AzureBlobClient) Download(ctx context.Context, asset, destination strin
 	if err := f.Truncate(*size); err != nil {
 		return err
 	}
-	fmt.Println(*size * 1024)
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/storage/azblob/highlevel.go
+	desc := fmt.Sprintf("Downloading %s", asset)
+	progbar := progressbar.DefaultBytes(*size, desc)
 	err = blob.DownloadBlobToFile(ctx, 0, 0, f, azblob.HighLevelDownloadFromBlobOptions{
 		// DownloadBlob*() Progress is currently broken
 		// https://github.com/Azure/azure-sdk-for-go/issues/16726
-		Progress: bytesTransferredFn(true, *size),
+		Progress: bytesTransferredFn(true, *size, progbar),
 	})
 	if err != nil {
 		return err
@@ -125,9 +120,10 @@ func (c *AzureBlobClient) Upload(ctx context.Context, file *os.File, blobPath st
 		return err
 	}
 	size := fileStats.Size()
-
+	desc := fmt.Sprintf("Uploading to %s", blobPath)
+	progbar := progressbar.DefaultBytes(size, desc)
 	_, err = newBlob.UploadFileToBlockBlob(ctx, file, azblob.HighLevelUploadToBlockBlobOption{
-		Progress: bytesTransferredFn(false, size),
+		Progress: bytesTransferredFn(false, size, progbar),
 	})
 	if err != nil {
 		return err
@@ -145,6 +141,20 @@ func main() {
 	}
 
 	ctx := context.Background()
+	uploadFile := "azureblobtest"
+	f, err := os.Create(uploadFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(40 * 1024 * 1024); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := az.Upload(ctx, f, uploadFile); err != nil {
+		log.Fatal(err)
+	}
+	f.Close()
 
 	testFileName := "azureblobtest.txt"
 
