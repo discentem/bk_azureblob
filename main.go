@@ -11,6 +11,7 @@ import (
 
 	progressbar "github.com/schollz/progressbar/v3"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 )
@@ -29,8 +30,16 @@ type AzureBlobClient struct {
 // For now, there is no choice of credential for caller, *azidentity.DeviceCodeCredential is always used.
 // https://github.com/Azure/azure-sdk-for-go/issues/16723
 func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient, error) {
+	interactive, err := azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
+		TenantID:    c.TenantID,
+		ClientID:    c.ClientID,
+		RedirectURL: "http://localhost:9090",
+	})
+	if err != nil {
+		return nil, err
+	}
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/azidentity/device_code_credential.go
-	credential, err := azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
+	deviceCode, err := azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
 		TenantID: c.TenantID,
 		ClientID: c.ClientID,
 		// Customizes the UserPrompt. Replaces VerificationURL with shortlink.
@@ -44,10 +53,17 @@ func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient,
 	if err != nil {
 		return nil, err
 	}
+	chain, err := azidentity.NewChainedTokenCredential(
+		[]azcore.TokenCredential{interactive, deviceCode},
+		&azidentity.ChainedTokenCredentialOptions{},
+	)
+	if err != nil {
+		return nil, err
+	}
 	container, err := azblob.NewContainerClient(
 		// Construct container url
 		fmt.Sprintf("https://%s.blob.core.windows.net/%s", c.StorageAccount, c.ContainerName),
-		credential,
+		chain,
 		&azblob.ClientOptions{},
 	)
 	if err != nil {
