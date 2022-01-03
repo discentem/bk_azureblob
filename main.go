@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -71,10 +72,13 @@ func (c *AzureBlobClient) init() error {
 func bytesTransferredFn(isDownload bool, size int64, progbar *progressbar.ProgressBar) func(bytesTransferred int64) {
 	return func(bytesTransferred int64) {
 		progbar.Set64(bytesTransferred)
+		f := bufio.NewWriter(os.Stdout)
+		defer f.Flush()
+		f.Write([]byte(progbar.String()))
 	}
 }
 
-// Download downloads a blob to a local file. If AzureBlobDownloader is not yet authenicated, Download will execute authentication flow.
+// Download downloads a blob to a local file. If AzureBlobDownloader is not yet authenticated, Download will execute authentication flow.
 func (c *AzureBlobClient) Download(ctx context.Context, asset, destination string) error {
 	if err := c.init(); err != nil {
 		return err
@@ -95,7 +99,7 @@ func (c *AzureBlobClient) Download(ctx context.Context, asset, destination strin
 	}
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/storage/azblob/highlevel.go
 	desc := fmt.Sprintf("Downloading %s", asset)
-	progbar := progressbar.DefaultBytes(*size, desc)
+	progbar := progressbar.DefaultBytesSilent(*size, desc)
 	err = blob.DownloadBlobToFile(ctx, 0, 0, f, azblob.HighLevelDownloadFromBlobOptions{
 		// DownloadBlob*() Progress is currently broken
 		// https://github.com/Azure/azure-sdk-for-go/issues/16726
@@ -104,6 +108,7 @@ func (c *AzureBlobClient) Download(ctx context.Context, asset, destination strin
 	if err != nil {
 		return err
 	}
+	fmt.Println(progbar.String())
 	return nil
 }
 
@@ -121,13 +126,14 @@ func (c *AzureBlobClient) Upload(ctx context.Context, file *os.File, blobPath st
 	}
 	size := fileStats.Size()
 	desc := fmt.Sprintf("Uploading to %s", blobPath)
-	progbar := progressbar.DefaultBytes(size, desc)
+	progbar := progressbar.DefaultBytesSilent(size, desc)
 	_, err = newBlob.UploadFileToBlockBlob(ctx, file, azblob.HighLevelUploadToBlockBlobOption{
 		Progress: bytesTransferredFn(false, size, progbar),
 	})
 	if err != nil {
 		return err
 	}
+	fmt.Println(progbar.String())
 	return nil
 }
 
