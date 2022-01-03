@@ -153,7 +153,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer f.Close()
-	if err := f.Truncate(40 * 1024 * 1024); err != nil {
+	if err := f.Truncate(7 * 1024 * 1024); err != nil {
 		log.Fatal(err)
 	}
 
