@@ -16,26 +16,34 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 )
 
+type AzureBlobCredentialOptions struct {
+	InteractiveCredential bool
+}
+
 // AzureBlobClient is an abstraction of the various clients needed for Blob downloads
 type AzureBlobClient struct {
-	ClientID        string
-	ClientSecret    string
-	TenantID        string
-	StorageAccount  string
-	ContainerName   string
-	containerClient *azblob.ContainerClient
+	ClientID          string
+	TenantID          string
+	StorageAccount    string
+	ContainerName     string
+	containerClient   *azblob.ContainerClient
+	CredentialOptions *AzureBlobCredentialOptions
 }
 
 // InitCredential returns either an interactive credential or device code credential
 // Interative is attempted first. If it fails, device Code is then attempted.
-func (c *AzureBlobClient) InitCredential() (*azcore.TokenCredential, error) {
-	interactive, err := azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
-		TenantID:    c.TenantID,
-		ClientID:    c.ClientID,
-		RedirectURL: "http://localhost:9090",
-	})
-	if err != nil {
-		return nil, err
+func (c *AzureBlobClient) InitCredential(credOpts *AzureBlobCredentialOptions) (*azcore.TokenCredential, error) {
+	credList := []azcore.TokenCredential{}
+	if credOpts.InteractiveCredential {
+		interactive, err := azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
+			TenantID:    c.TenantID,
+			ClientID:    c.ClientID,
+			RedirectURL: "http://localhost:9090",
+		})
+		if err != nil {
+			return nil, err
+		}
+		credList = append(credList, interactive)
 	}
 	// https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/azidentity/device_code_credential.go
 	deviceCode, err := azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
@@ -52,8 +60,9 @@ func (c *AzureBlobClient) InitCredential() (*azcore.TokenCredential, error) {
 	if err != nil {
 		return nil, err
 	}
+	credList = append(credList, deviceCode)
 	chain, err := azidentity.NewChainedTokenCredential(
-		[]azcore.TokenCredential{interactive, deviceCode},
+		credList,
 		&azidentity.ChainedTokenCredentialOptions{},
 	)
 	if err != nil {
@@ -79,7 +88,7 @@ func (c *AzureBlobClient) InitContainerClient(tokenCred *azcore.TokenCredential)
 // init sets the container client and creates a context if these aren't already initialized
 func (c *AzureBlobClient) init() error {
 	if c.containerClient == nil {
-		credential, err := c.InitCredential()
+		credential, err := c.InitCredential(c.CredentialOptions)
 		if err != nil {
 			return err
 		}
@@ -161,14 +170,31 @@ func (c *AzureBlobClient) Upload(ctx context.Context, file *os.File, blobPath st
 	return nil
 }
 
-func main() {
-	az := AzureBlobClient{
+func NewAzureBlobClientDefault(clientID, tenantID, containerName, storageAccount string) *AzureBlobClient {
+	return &AzureBlobClient{
 		ClientID:       clientID,
-		ClientSecret:   clientSecret,
 		TenantID:       tenantID,
 		ContainerName:  containerName,
 		StorageAccount: storageAccount,
+		CredentialOptions: &AzureBlobCredentialOptions{
+			InteractiveCredential: false,
+		},
 	}
+}
+
+func NewAzureBlobClientInteractive(clientID, tenantID, containerName, storageAccount string) *AzureBlobClient {
+	client := NewAzureBlobClientDefault(clientID, tenantID, containerName, storageAccount)
+	client.CredentialOptions.InteractiveCredential = true
+	return client
+}
+
+func main() {
+	az := NewAzureBlobClientDefault(
+		clientID,
+		tenantID,
+		containerName,
+		storageAccount,
+	)
 
 	ctx := context.Background()
 	testFileName := "azureblobtest.txt"
