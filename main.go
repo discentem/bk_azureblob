@@ -26,10 +26,9 @@ type AzureBlobClient struct {
 	containerClient *azblob.ContainerClient
 }
 
-// InitCredAndContainerClient returns an authenticated Azure Blob Container Client.
-// For now, there is no choice of credential for caller, *azidentity.DeviceCodeCredential is always used.
-// https://github.com/Azure/azure-sdk-for-go/issues/16723
-func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient, error) {
+// InitCredential returns either an interactive credential or device code credential
+// Interative is attempted first. If it fails, device Code is then attempted.
+func (c *AzureBlobClient) InitCredential() (*azcore.TokenCredential, error) {
 	interactive, err := azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
 		TenantID:    c.TenantID,
 		ClientID:    c.ClientID,
@@ -60,10 +59,15 @@ func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient,
 	if err != nil {
 		return nil, err
 	}
+	tokenCred := azcore.TokenCredential(chain)
+	return &tokenCred, nil
+}
+
+func (c *AzureBlobClient) InitContainerClient(tokenCred *azcore.TokenCredential) (*azblob.ContainerClient, error) {
 	container, err := azblob.NewContainerClient(
 		// Construct container url
 		fmt.Sprintf("https://%s.blob.core.windows.net/%s", c.StorageAccount, c.ContainerName),
-		chain,
+		*tokenCred,
 		&azblob.ClientOptions{},
 	)
 	if err != nil {
@@ -75,11 +79,15 @@ func (c *AzureBlobClient) InitCredAndContainerClient() (*azblob.ContainerClient,
 // init sets the container client and creates a context if these aren't already initialized
 func (c *AzureBlobClient) init() error {
 	if c.containerClient == nil {
-		client, err := c.InitCredAndContainerClient()
+		credential, err := c.InitCredential()
 		if err != nil {
 			return err
 		}
-		// safe client in c for reuse
+		client, err := c.InitContainerClient(credential)
+		if err != nil {
+			return nil
+		}
+		// save client in c for reuse
 		c.containerClient = client
 	}
 	return nil
@@ -163,21 +171,6 @@ func main() {
 	}
 
 	ctx := context.Background()
-	uploadFile := "azureblobtest"
-	f, err := os.Create(uploadFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
-	if err := f.Truncate(7 * 1024 * 1024); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := az.Upload(ctx, f, uploadFile); err != nil {
-		log.Fatal(err)
-	}
-	f.Close()
-
 	testFileName := "azureblobtest.txt"
 
 	if err := az.Download(ctx, testFileName, testFileName); err != nil {
