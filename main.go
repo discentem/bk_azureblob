@@ -94,7 +94,7 @@ func (c *AzureBlobClient) init() error {
 		}
 		client, err := c.InitContainerClient(credential)
 		if err != nil {
-			return nil
+			return err
 		}
 		// save client in c for reuse
 		c.containerClient = client
